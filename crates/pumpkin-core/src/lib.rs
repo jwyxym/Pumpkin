@@ -603,17 +603,27 @@ impl PumpkinServer {
                                      if let ClientPlatform::Java(client) = player.client.as_ref() {
                                          client.set_player(player.clone());
                                      }
-                                     world
-                                         .spawn_java_player(&server_clone.basic_config, &player, &server_clone)
-                                         .await;
-
-                                     if let ClientPlatform::Java(client) = player.client.as_ref() {
-                                         client.progress_player_packets(&player, &server_clone).await;
-
-                                         // Close when done
-                                         client.close();
-                                         client.await_tasks().await;
-                                     }
+									if let ClientPlatform::Java(client) = player.client.as_ref() {
+										// Read disconnects and keep-alives while spawn chunks and plugins load.
+										tokio::join!(
+											async {
+												tokio::select! {
+													biased;
+													() = client.await_close_interrupt() => {},
+													() = world.spawn_java_player(
+														&server_clone.basic_config,
+														&player,
+														&server_clone,
+													) => {},
+												}
+											},
+											async {
+												client.progress_player_packets(&player, &server_clone).await;
+												client.close();
+											},
+										);
+										client.await_tasks().await;
+									}
                                      player.remove().await;
                                      server_clone.remove_player(&player);
                                     if let Err(e) = server_clone
